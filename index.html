@@ -197,6 +197,8 @@
       .hand-name{ font-size:12px; font-weight:700; color:#ffeec2; text-shadow:0 1px 3px rgba(0,0,0,.75); min-height:15px; text-align:center; }
       .seat-meta{ display:contents; } /* action tag + hand label sit beside the plate, never in the centre */
       .mode-card.flash{ border-color:var(--gold); box-shadow:0 0 0 2px rgba(212,175,55,.65), 0 0 22px rgba(212,175,55,.35); }
+      .field.attn{ border-color:var(--gold); animation:numpulse 1.2s ease-in-out 2; }
+      @keyframes numpulse{ 0%,100%{ outline:0 solid transparent; } 50%{ outline:3px solid rgba(212,175,55,.55); outline-offset:1px; } }
 
       /* playing cards */
       .pcard{ width:var(--cw); aspect-ratio:5/7; perspective:600px; flex:none; }
@@ -372,7 +374,7 @@
         <section class="panel">
           <h2 style="margin:0 0 4px; font-size:28px;">Welcome to the table</h2>
           <p class="hint" style="margin:0;">Classic five-card stud: one card down, four up, a betting round on every street. Play solo against the house bots, or open a private room and deal your friends in.</p>
-          <label class="lbl" for="inp-name">Your display name</label>
+          <label class="lbl" for="inp-name">Your display name <span id="name-req" style="color:var(--gold); display:none;">— type it before joining</span></label>
           <input class="field" id="inp-name" maxlength="16" placeholder="e.g. Ace Annie" autocomplete="off" />
           <div class="hero-cards" aria-hidden="true">
             <div class="pcard"><div class="inner"><div class="face red"><div class="corner">A<br/><span class="suit">♥</span></div><div class="pip">♥</div></div><div class="back"></div></div></div>
@@ -1412,6 +1414,7 @@
     if(!msg || !msg.t) return;
     if(msg.t === "join"){
       const name = String(msg.name || "Player").slice(0, 16).trim() || "Player";
+      /* guest's chosen name is stored verbatim (trimmed, ≤16 chars) — no rename */
       if(gameRunning){ hostSendError(conn, "This room is already in a game. Ask the host to finish the hand and return to the lobby, then join."); return; }
       if(Object.keys(hostConns).length + 1 >= MAX_SEATS){ hostSendError(conn, "That room is full (5 players max)."); return; }
       hostConns[pid] = { conn, name };
@@ -1486,7 +1489,11 @@
   function guestOnData(msg, markJoined){
     if(!msg || !msg.t) return;
     if(msg.t === "joined"){ myId = msg.id; markJoined(); }
-    else if(msg.t === "lobby"){ lobbyState = msg.state; fillBots = msg.state.fillBots; markJoined(); showScreen("lobby"); renderLobby(); }
+    else if(msg.t === "lobby"){
+      lobbyState = msg.state; fillBots = msg.state.fillBots; markJoined(); showScreen("lobby"); renderLobby();
+      const nr = $("#name-req"); if(nr){ nr.style.display = "none"; }
+      const he = $("#home-err"); if(he){ he.textContent = ""; }
+    }
     else if(msg.t === "state"){ markJoined(); render(msg.state); }
     else if(msg.t === "error"){ $("#home-err").textContent = msg.msg; toast(msg.msg, 4200); Snd.error(); cleanupNet(); showScreen("home"); }
     else if(msg.t === "kicked"){ showOverlay("Removed from room", msg.msg || "The host closed the room.", "Back to Home"); cleanupNet(false); }
@@ -1546,9 +1553,22 @@
   }
   $("#btn-solo").addEventListener("click", ()=>{ Snd.ensure(); Snd.click(); myName = myDisplayName(); startSolo(); });
   $("#btn-create").addEventListener("click", ()=>{ Snd.ensure(); Snd.click(); myName = myDisplayName(); createRoom(); });
-  $("#btn-join").addEventListener("click", ()=>{ Snd.ensure(); Snd.click(); myName = myDisplayName(); joinRoom($("#inp-code").value); });
+  $("#btn-join").addEventListener("click", ()=>{
+    Snd.ensure(); Snd.click();
+    /* Don't silently fall back to "Player": if the name box is empty, stop and
+       tell the guest exactly what's missing so the name actually gets set. */
+    if(!$("#inp-name").value.trim()){
+      myName = null;
+      Snd.error();
+      $("#home-err").textContent = "Type a display name first (up to 16 characters), then tap Join.";
+      const f = $("#inp-name"); if(f){ f.classList.add("attn"); f.focus(); setTimeout(()=>f.classList.remove("attn"), 1800); }
+      return;
+    }
+    myName = myDisplayName(); $("#home-err").textContent = "";
+    joinRoom($("#inp-code").value);
+  });
   $("#inp-code").addEventListener("keydown", e=>{ if(e.key === "Enter") $("#btn-join").click(); });
-  $("#inp-name").addEventListener("keydown", e=>{ if(e.key === "Enter") $("#btn-solo").click(); });
+  $("#inp-name").addEventListener("keydown", e=>{ if(e.key === "Enter") $("#btn-join").value ? $("#btn-join").click() : $("#btn-solo").click(); });
 
   $("#btn-sound").addEventListener("click", ()=>{
     Snd.muted = !Snd.muted;
@@ -1662,12 +1682,19 @@
       joinCard.classList.add("flash");
       try{ joinCard.scrollIntoView({ block:"center", behavior:"smooth" }); }catch(e){}
     }
+    const nameReq = $("#name-req");
+    if(nameReq){ nameReq.style.display = "inline"; }
+    const nameFld = $("#inp-name");
+    if(nameFld){ nameFld.classList.add("attn"); setTimeout(()=>{ nameFld.classList.remove("attn"); }, 2400); }
     toast("Room code " + code + " filled in — enter your name and tap Join");
-    $("#inp-name").focus();
+    /* No .focus() / scrollIntoView() here: yanking focus out of the name box as
+       the guest starts typing is what made the name "not stick". The flashed
+       join-card + toast already point them to the code field. */
   })();
 
   /* keep seat fans fitted to their zones when the viewport changes size */
   let lastMobileBp = window.innerWidth <= 640;
+
   window.addEventListener("resize", ()=>{
     if(screen !== "game" || !view) return;
     const m = window.innerWidth <= 640;
